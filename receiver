@@ -1,0 +1,368 @@
+#!/usr/bin/env python
+
+# -*- coding: utf-8 -*-
+
+import glob
+
+import serial
+
+import time
+
+import os.path
+
+import threading
+
+from datetime import datetime
+
+import random
+
+import sys
+
+from time import sleep
+
+import pytz
+
+import pathlib
+
+import struct
+
+
+
+
+# LoRaデバイスのリスト
+
+loraDevice = []
+
+
+
+# LORAID
+
+ES_OWMID = ["1234","1234","1234","1234"]
+
+# PANID
+
+ES_PANID = ["1001","1002","1003","1004"]
+
+# DISTID
+
+ES_DSTID = ["0001","0002","0003","0004"]
+
+
+
+"""
+
+125kHz 以下の場合 : 1～15
+
+250kHz の場合 : 1～7
+
+500kHz の場合 : 1～5
+
+"""
+
+ES_CHID = ["1","1","1"]
+
+
+
+"""
+
+1 CORDINATE
+
+2 EDGE
+
+"""
+
+ES_NODEID= ["2","2","2"]
+
+# 転送速度
+
+ES_BAUDRATE = ["5","5","5"]
+
+"""
+
+SF 7-12
+
+"""
+
+ES_SF = ["7","7","7"]
+
+ES_SF_T = "7"
+
+"""
+
+Band幅
+
+ES920, 3:62.5kHz 4:125kHz 5: 250kHz 6:500kHz 
+
+"""
+
+ES_BAND = ["6","6","6"]
+
+ES_BAND_T = "6"
+
+
+
+"""
+
+TX POWER -18-13dBm
+
+"""
+
+ES_POWER = ["13","13","13"]
+
+ES_POWER_T = "13"
+
+
+
+"""
+
+RSSIのOn/Off
+
+1: ON 2: OFF
+
+"""
+
+ES_RSSI = ["1","1","1"]
+
+ES_RSSI_T = "1"
+
+
+
+"""
+
+ACKのOn/Off
+
+1: ON 2: OFF
+
+"""
+
+ES_ACK = ["2","2","2"]
+
+ES_ACK_T = "2"
+
+
+
+RECEIVERS = ["/dev/ttyUSB"]
+
+
+
+find_devices = []
+
+
+
+DEVICE_ES920LR  = 1
+
+MODE_CONFIG = 1
+
+MODE_OP = 2
+
+type = "SERVER"
+
+class device(threading.Thread):
+
+
+
+	def __init__(self, i, port, operation):
+
+		threading.Thread.__init__(self)
+
+		self.port = port
+
+		self.con = serial.Serial(port, 115200, dsrdtr=True)
+
+		self.con.dtr = False
+
+		self.con.flushInput()
+
+		self.con.write("processor\r\n".encode())
+
+		self.operation = operation
+
+		self.no = i
+
+		self.start_time = datetime.now().strftime("%Y/%m/%d %H:%M:%S")
+
+
+
+	def run(self):
+
+		while True:
+
+			raw = self.con.readline()
+
+			print(str(raw))
+
+			if raw == b"\xfc\xfc\xfc\r\n":
+
+				level = 0
+
+				mode = MODE_CONFIG
+
+				continue
+
+			if mode == MODE_CONFIG:
+
+				if raw == b"Select Mode [1.terminal or 2.processor]\r\n":
+
+					cmd = self.operation[level] + "\r\n";
+
+					self.sendData(cmd)
+
+					print("SendCmd:" + self.operation[level])
+
+				elif raw == b"OK\r\n":
+
+					level = level + 1
+
+					if level == len(self.operation):
+
+						mode = MODE_OP
+
+						#print("Move Operation Mode")
+
+						#cmd = "01234A678901234567890123456789\r\n"
+
+						#self.sendData(cmd)
+
+						continue
+
+					cmd = self.operation[level] + "\r\n";
+
+					self.sendData(cmd)
+
+					print("SendCmd:" + self.operation[level])				
+
+			elif mode == MODE_OP:
+
+				if b"FF" in raw:
+
+					print("Receive")
+
+					#to_addr = "" + chr(raw[4]) + chr(raw[5]) + chr(raw[6]) + chr(raw[7])
+
+					#from_addr = "" + chr(raw[8]) + chr(raw[9]) + chr(raw[10]) + chr(raw[11])
+
+					#rssi = "" + chr(raw[0]) + chr(raw[1]) + chr(raw[2]) + chr(raw[3])
+
+					fmt = '4s4s4s' + str(len(raw) - 14) + 'sxx'
+
+					data = struct.unpack(fmt, raw)
+
+					hex2i = lambda x: int(x, 16) if int(x, 16) <= 0x7fff else ~ (0xffff - int(x, 16)) + 1
+
+					rssi = hex2i(data[0])
+
+					# current date and time
+
+					now = datetime.now().strftime("%Y/%m/%d %H:%M:%S")
+
+					log = str(now) + "," + str(rssi) + "," + str(data[1].decode()) + "," + str(data[2].decode()) + "," + str(data[3].decode()) + "\r\n"
+
+					port_name = self.port.replace("/dev/", "")
+
+					port_time = self.start_time.replace("/", "_")
+
+					port_time = port_time .replace(" ", "_")
+
+					port_time = port_time .replace(":", "_")
+
+					file_name = port_name + "_" + port_time 
+
+					try:
+
+						with open("./log/" + file_name + ".csv", mode='a') as f:
+
+							f.write(log)
+
+					except FileExistsError:
+
+						pass
+
+					#print(int(rssi, 16))
+
+				elif raw == b"OK\r\n":
+
+					print("OK")
+
+					#time.sleep(1)	
+
+					#print("SendData")
+
+					#cmd = "01234A678901234567890123456789\r\n"
+
+					#self.sendData(cmd)
+
+				elif raw == b"NG 001\r\n":
+
+					print("未定義コマンドを検出:"+self.no)
+
+				elif raw == b"NG 002\r\n":
+
+					print("オプション異常値:"+self.no)
+
+				elif raw == b"NG 100\r\n":
+
+					print("送信データ長異常:"+self.no)
+
+				elif raw == b"NG 101\r\n":
+
+					print("送信異常(送信中の送信要求):"+self.no)
+
+				elif raw == b"NG 102\r\n":
+
+					print("送信異常(キャリアセンス検出):"+self.no)
+
+					time.sleep(0.3)
+
+				elif raw == b"NG 103\r\n":
+
+					print("ACK 未受信:"+self.no)
+
+				elif raw == b"NG 104\r\n":
+
+					print("送信異常(送信未完了):"+self.no)
+
+	def sendData(self, cmd):
+
+		self.con.write(cmd.encode())
+
+
+
+for i in range(len(RECEIVERS)):
+
+	operation = ["processor", 
+
+			#"show",
+
+			"bw " + ES_BAND[i],
+
+			"channel " + ES_CHID[i], 
+
+			"ownid " + ES_OWMID[i], 
+
+			"panid " + ES_PANID[i], 
+
+			"dstid " + ES_DSTID[i], 
+
+			"node " + ES_NODEID[i], 
+
+			#"sf " + ES_SF[i], 
+
+			"sf " + ES_SF_T,
+
+			#"rate " + RATE,
+
+			"rcvid 1",
+
+			"power " + ES_POWER_T,
+
+			"rssi " + ES_RSSI_T,
+
+			"ack " + ES_ACK_T,
+
+			"save",
+
+			"start"]
+
+	loraDevice.append(device(i, RECEIVERS[i],operation))
+
+	loraDevice[i].start()
