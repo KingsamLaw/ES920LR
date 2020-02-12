@@ -1,0 +1,315 @@
+#!/usr/bin/env python
+#coding=utf-8
+
+import os
+
+import serial
+
+import time
+
+import os.path
+
+from datetime import datetime
+
+import random
+
+import sys
+
+ 
+# LORAID
+
+ES_OWMID = ["0001","0002","0003","0004"]
+
+# PANID
+
+ES_PANID = ["1001","1002","1003","1004"]
+
+# DISTID
+
+ES_DSTID = ["1234"]
+
+# CHNANNELID
+
+ES_CHID = ["10"]
+
+
+
+"""
+
+1 CORDINATE
+
+2 EDGE
+
+"""
+
+ES_NODEID= ["2"]
+
+ES_BAUDRATE = ["5"]
+
+
+"""
+
+SF 7-12
+
+"""
+
+ES_SF = ["12"]
+
+ES_SF_T = "12"
+
+
+"""
+
+Band
+
+ES920, 3:62.5kHz 4:125kHz 5: 250kHz 6:500kHz 
+
+"""
+
+ES_BAND = ["3"]
+
+ES_BAND_T = "3"
+
+
+
+"""
+
+TX POWER -18-13dBm
+
+"""
+
+ES_POWER = ["13"]
+
+ES_POWER_T = "13"
+
+
+
+
+ES_RSSI = ["1"]
+
+ES_RSSI_T = "1"
+
+
+
+ES_ACK = ["2"]
+
+ES_ACK_T = "2"
+
+
+
+MODE_CONFIG = 1
+
+MODE_OP = 2
+
+
+DEVICE_ES920LR  = 1
+
+
+type = "SERVER"
+
+
+lora = serial.Serial(port="/dev/ttyUSB0",baudrate=115200,dsrdtr=True)
+
+gnss = serial.Serial(port="/dev/ttyUSB1",baudrate=9600,parity=serial.PARITY_NONE,stopbits=serial.STOPBITS_ONE,bytesize=serial.EIGHTBITS,timeout=1)
+
+StartTime = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
+
+operation = ["processor",
+             
+             "bw " + ES_BAND[0],
+             
+             "channel " + ES_CHID[0],
+             
+             "ownid " + ES_OWMID[0],
+             
+             "panid " + ES_PANID[0],
+             
+             "dstid " + ES_DSTID[0],
+             
+             "node " + ES_NODEID[0],
+             
+             "sf " + ES_SF_T,
+             
+             "power " + ES_POWER_T,
+             
+             "rcvid 1",
+             
+             "rssi " + ES_RSSI_T,
+             
+             "ack " + ES_ACK_T,
+             
+             "save",
+             
+             "start"]
+
+
+
+def sendGPS():
+    
+    while True:
+        
+        raw = lora.readline()
+        
+        print(raw)
+        
+        if raw == b"\xfc\xfc\xfc\r\n":
+            
+            level = 0
+            
+            mode = MODE_CONFIG
+            
+            continue
+        
+        if mode == MODE_CONFIG:
+            
+            if raw == b"Select Mode [1.terminal or 2.processor]\r\n":
+                
+                cmd = operation[level] + "\r\n"
+                
+                sendData(cmd)
+                
+                print("SendCmd:" + operation[level])
+                
+            elif raw == b"OK\r\n":
+                
+                level = level + 1
+                
+                if level == len(operation)-1:
+                    
+                    mode = MODE_OP
+                    
+                    print("Move Operation Mode\n")                    
+                                        
+                cmd = operation[level] + "\r\n"
+                    
+                sendData(cmd)
+                    
+                print("sendCmd:" + cmd)
+                    
+        elif mode == MODE_OP:
+                    
+            if raw == b"OK\r\n":
+                   
+                getGPS()
+                        
+            elif raw == b"NG 001\r\n":
+                        
+                print("未定義コマンドを検出")
+
+                sendData('Error001\r\n')
+                        
+            elif raw == b"NG 002\r\n":
+                        
+                print("オプション異常値")
+
+                sendData('Error002\r\n')
+                    
+            elif raw == b"NG 100\r\n":
+                        
+                print("送信データ長異常")
+                
+                sendData('Error100\r\n')
+                        
+            elif raw == b"NG 101\r\n":
+                        
+                print("送信異常(送信中の送信要求)")
+
+                sendData('Error101\r\n')
+                        
+            elif raw == b"NG 102\r\n":
+                        
+                print("送信異常(キャリアセンス検出)")
+
+                sendData('Error102\r\n')
+                        
+            elif raw == b"NG 103\r\n":
+                        
+                print("ACK 未受信")
+
+                sendData('Error103\r\n')
+                        
+            elif raw == b"NG 104\r\n":
+                        
+                print("送信異常(送信未完了)")
+
+                sendData('Error104\r\n')
+
+
+def sendData(cmd):
+    
+    lora.write(cmd.encode())
+
+
+def degrees_to_decimal(data,hemisphere):
+    
+    try:
+        
+        decimalPointPosition = data.index(".")
+        
+        degrees = float(data[:decimalPointPosition-2])
+        
+        minutes = float(data[decimalPointPosition-2:])/60
+        
+        output = str(round(degrees + minutes,6))
+        
+        return output
+    
+    except:
+        
+        return ""
+
+
+def parse_GNRMC(data):
+    
+    data = data.split(",")
+
+    try:
+
+        dict = {"fix_time":data[1],"validity":data[2],"latitude":data[3],"latitude_hemisphere":data[4],"longitude":data[5],"longitude_hemisphere":data[6],"speed":data[7],"true_course":data[8],"fix_date":data[9],"variation":data[10],"variation_e_w":data[11],"checksum":data[12]}
+
+        dict["decimal_latitude"] = degrees_to_decimal(dict["latitude"],dict["latitude_hemisphere"])
+
+        dict["decimal_longitude"] = degrees_to_decimal(dict["longitude"],dict["longitude_hemisphere"])
+
+        return dict
+
+    except:
+        
+        return {"validity":""}
+
+
+def getGPS():
+    
+    while True:
+                
+        line = gnss.readline()
+                
+        if b"$GNRMC" in line and b'A' in line:
+            
+            line = line.decode('utf-8')
+            
+            gpsData = parse_GNRMC(line)
+            
+            if gpsData["validity"] == "A":
+                
+                GPS = gpsData["decimal_latitude"] + ',' + gpsData["decimal_longitude"]+'\r\n'
+                
+                sendData(GPS)
+                
+                print(GPS)                
+                              
+                with open("/home/pi/Desktop/ID"+ES_OWMID[0]+"_Sended_log.csv",'a+') as f:
+                    
+                    f.write(GPS)
+                    
+                    break
+            else:
+
+                continue
+
+with open("/home/pi/Desktop/ID"+ES_OWMID[0]+"_Sended_log.csv",'a+') as f:
+                    
+                    f.write('*********,**********\n')
+                    
+                  
+sendGPS()
